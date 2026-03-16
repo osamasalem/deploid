@@ -1,3 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["scaffolder","template"]
+members = ["deploid", "template"]
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

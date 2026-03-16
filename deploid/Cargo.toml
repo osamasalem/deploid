@@ -1,10 +1,17 @@
 [package]
-name = "scaffolder"
+name = "deploid"
+description = "Cross-platform and scripted TUI install wizard builder"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
+
 
 [dependencies]
+clap = { version = "4.6.0", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 walkdir = "2.5.0"
 wincode = { version = "0.4.5", features = ["derive"] }
 zip = "8.2.0"
+
+[build-dependencies]
+winres = "0.1.12"

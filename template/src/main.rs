@@ -8,6 +8,10 @@ use std::{
 };
 
 use anyhow::{Context, Error, anyhow, bail};
+use rand::{
+    distr::{Alphanumeric, SampleString},
+    rng,
+};
 use ratatui::{
     Frame, Terminal,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
@@ -23,6 +27,17 @@ use ratatui::{
 use rhai::{AST, Dynamic, Engine, FuncArgs, Map, Scope};
 use smartstring::alias;
 use tui_input::{Input, backend::crossterm::EventHandler};
+
+const MAGIC_NUM: u64 = 0xFEEDCAFEBABEFACE;
+
+#[derive(SchemaWrite, SchemaRead)]
+#[repr(C)]
+struct PostExecutableHeader {
+    magic: u64,
+    size: usize,
+}
+
+const POST_EXECUTABLE_HEADER_SIZE: usize = size_of::<PostExecutableHeader>();
 
 enum StepResult {
     Next,
@@ -452,7 +467,7 @@ Are you sure you want to proceed"#;
             -(POST_EXECUTABLE_HEADER_SIZE as i64),
         ))?;
 
-        let mut buf = [0u8; POST_EXECUTABLE_HEADER_SIZE as usize];
+        let mut buf = [0u8; POST_EXECUTABLE_HEADER_SIZE];
 
         file.read_exact(&mut buf)?;
 
@@ -469,9 +484,7 @@ Are you sure you want to proceed"#;
         file.seek(std::io::SeekFrom::End(start))?;
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        let token = (0..20)
-            .map(|_| rand::random_range('a'..'z'))
-            .collect::<String>();
+        let token = Alphanumeric.sample_string(&mut rng(), 20);
 
         let temp_install_dir = format!("_deploid_install_{now}_{token}");
         let base_dir = env::temp_dir().join(temp_install_dir);
@@ -687,7 +700,7 @@ mod StepModule {
     pub const Path: Step = Step::Path;
     pub const CopyFiles: Step = Step::CopyFiles;
     pub const Confirm: Step = Step::Confirm;
-    //pub const Finish: Step = Step::Finish;
+    pub const Finish: Step = Step::Finish;
 
     #[rhai_fn(global, get = "enum_type", pure)]
     pub fn get_type(my_enum: &mut Step) -> String {
@@ -697,7 +710,8 @@ mod StepModule {
             Step::License => "builtin_license".to_string(),
             Step::Path => "builtin_path".to_string(),
             Step::CopyFiles => "builtin_copyfiles".to_string(),
-            Step::Quit | Step::Finish | Step::Confirm => {
+            Step::Confirm => "builtin_confirm".to_string(),
+            Step::Quit | Step::Finish => {
                 panic!("this actions has no after")
             }
         }
@@ -713,7 +727,6 @@ mod StepModule {
         format!("{my_enum:?}")
     }
 
-    // '==' and '!=' operators
     #[rhai_fn(global, name = "==", pure)]
     pub fn eq(my_enum: &mut Step, my_enum2: Step) -> bool {
         my_enum == &my_enum2
@@ -728,7 +741,6 @@ mod StepModule {
 enum InstallAction {
     CopyFile(String, String),
     CreateDir(String),
-    CopyDir(String, String),
     ExecuteCommand(String, Vec<String>),
 }
 
@@ -762,36 +774,11 @@ impl InstallAction {
         Ok(())
     }
 
-    fn act_copy_dir(src: &str, dst: &str, ctx: &InstallationContext) -> anyhow::Result<()> {
-        let dst_path = ctx.get_config_value("path")?.to_string();
-
-        let dst_path = PathBuf::from(dst_path).join(dst);
-
-        for entry in WalkDir::new(src) {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() {
-                let file_path = path.strip_prefix(src).expect("This is file.right?");
-                let dst_path = dst_path.join(file_path);
-                //println!("{}=>{}", path.display(), dst_path.to_string_lossy());
-                Self::act_copy_file(
-                    path.display().to_string().as_str(),
-                    &dst_path.to_string_lossy(),
-                    ctx,
-                )?
-            }
-        }
-
-        Ok(())
-    }
-
     fn act(&self, ctx: &InstallationContext) -> anyhow::Result<()> {
         match self {
             Self::CopyFile(src, dst) => Self::act_copy_file(&src, &dst, ctx),
             Self::CreateDir(dir) => Self::act_create_dir(dir, ctx),
             Self::ExecuteCommand(cmd, args) => Self::act_execute(cmd, args, ctx),
-            Self::CopyDir(src, dst) => Self::act_copy_dir(src, dst, ctx),
         }
     }
 }
@@ -811,7 +798,7 @@ mod InstallActionModule {
         InstallAction::CopyFile(src.clone(), src)
     }
 
-    pub fn GenerateCopyDirToEntries(src: String, dst: String) -> Dynamic {
+    pub fn CopyDir(src: String, dst: String) -> Dynamic {
         let mut res = vec![];
         for entry in WalkDir::new(src.clone()) {
             let entry = entry.unwrap();
@@ -846,7 +833,6 @@ mod InstallActionModule {
     pub fn get_type(my_enum: &mut InstallAction) -> String {
         match my_enum {
             InstallAction::CopyFile(_, _) => "CopyFile".into(),
-            InstallAction::CopyDir(_, _) => "CopyFolder".into(),
             InstallAction::CreateDir(_) => "CreateDir".into(),
             InstallAction::ExecuteCommand(_, _) => "ExecuteCommand".into(),
         }
@@ -874,7 +860,6 @@ mod InstallActionModule {
 }
 
 struct InstallationContext {
-    //logfile: File,
     engine: Engine,
     scope: Scope<'static>,
     config: Dynamic,
@@ -961,7 +946,7 @@ impl InstallationContext {
         args: impl FuncArgs,
     ) -> anyhow::Result<T> {
         self.engine
-            .call_fn::<T>(
+            .call_fn(
                 &mut self.scope,
                 self.script.as_ref().expect("the script should be loaded"),
                 fn_name,
@@ -970,6 +955,7 @@ impl InstallationContext {
             .map_err(|e| anyhow!("{e}"))
     }
 }
+
 fn main() -> anyhow::Result<()> {
     let mut ctx = InstallationContext::new()?;
 
@@ -989,22 +975,16 @@ fn main() -> anyhow::Result<()> {
                     return;
                 }
                 Ok(StepResult::Next) => {
-                    let next = match step {
-                        Step::Confirm => Step::CopyFiles,
-                        Step::CopyFiles => Step::Finish,
-                        _ => {
-                            match ctx.call_function::<Step>(
-                                "next_action",
-                                (ctx.config.clone(), step.clone()),
-                            ) {
-                                Ok(step) => step,
-                                Err(e) => {
-                                    let _ = act_error(term, &mut ctx, e);
-                                    return;
-                                }
-                            }
+                    let next = match ctx
+                        .call_function("next_action", (ctx.config.clone(), step.clone()))
+                    {
+                        Ok(step) => step,
+                        Err(e) => {
+                            let _ = act_error(term, &mut ctx, e);
+                            return;
                         }
                     };
+
                     history.push(step);
                     step = next;
                 }
@@ -1026,14 +1006,3 @@ fn main() -> anyhow::Result<()> {
     });
     Ok(())
 }
-
-const MAGIC_NUM: u64 = 0xFEEDCAFEBABEFACE;
-
-#[derive(SchemaWrite, SchemaRead)]
-#[repr(C)]
-struct PostExecutableHeader {
-    magic: u64,
-    size: usize,
-}
-
-const POST_EXECUTABLE_HEADER_SIZE: usize = size_of::<PostExecutableHeader>();
