@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Error, anyhow, bail};
+use log::{debug, error, info};
 use rand::{
     distr::{Alphanumeric, SampleString},
     rng,
@@ -25,6 +26,7 @@ use ratatui::{
     },
 };
 use rhai::{AST, Dynamic, Engine, FuncArgs, Map, Scope};
+use simplelog::{Config, WriteLogger};
 use smartstring::alias;
 use tui_input::{Input, backend::crossterm::EventHandler};
 
@@ -483,12 +485,7 @@ Are you sure you want to proceed"#;
 
         file.seek(std::io::SeekFrom::End(start))?;
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        let token = Alphanumeric.sample_string(&mut rng(), 20);
-
-        let temp_install_dir = format!("_deploid_install_{now}_{token}");
-        let base_dir = env::temp_dir().join(temp_install_dir);
-        fs::create_dir(&base_dir)?;
+        let base_dir = ctx.base_dir.clone();
 
         let mut zip = ZipArchive::new(file)?;
 
@@ -746,6 +743,7 @@ enum InstallAction {
 
 impl InstallAction {
     fn act_execute(cmd: &str, args: &[String], _: &InstallationContext) -> anyhow::Result<()> {
+        info!("InstallAction: Execute '{cmd}' '{args:?}'");
         Command::new(cmd)
             .args(args)
             .spawn()
@@ -762,6 +760,8 @@ impl InstallAction {
         let dst_path = ctx.get_config_value("path")?.to_string();
 
         let dst_path = PathBuf::from(dst_path).join(dst);
+
+        info!("InstallAction: Copy '{src}' '{}'", dst_path.display());
 
         let parent = dst_path.parent().ok_or(anyhow!("Failed to get parent"))?;
         if !parent.exists() {
@@ -864,15 +864,31 @@ struct InstallationContext {
     scope: Scope<'static>,
     config: Dynamic,
     script: Option<AST>,
+    base_dir: PathBuf,
 }
 
 impl InstallationContext {
     fn new() -> anyhow::Result<Self> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let token = Alphanumeric.sample_string(&mut rng(), 20);
+
+        let temp_install_dir = format!("_deploid_install_{now}_{token}");
+        let base_dir = env::temp_dir().join(temp_install_dir);
+
+        fs::create_dir(&base_dir)?;
+        simplelog::WriteLogger::init(
+            log::LevelFilter::Trace,
+            Config::default(),
+            File::create(base_dir.join("deploid_install.log")).unwrap(),
+        )?;
+
+        info!("Starting installation session");
         let mut ret = Self {
             engine: Engine::new(),
             scope: Scope::new(),
             config: Dynamic::from(Map::new()).into_shared(),
             script: None,
+            base_dir,
         };
         ret.engine
             .register_type_with_name::<Step>("Step")
@@ -883,22 +899,10 @@ impl InstallationContext {
                 exported_module!(InstallActionModule).into(),
             )
             .on_print(|s| {
-                let mut logfile = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("install_print.log")
-                    .unwrap();
-                let _ = writeln!(logfile, "{s}");
-                let _ = logfile.flush();
+                info!("{s}");
             })
             .on_debug(|t, s, p| {
-                let mut logfile = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("install_debug.log")
-                    .unwrap();
-                let _ = writeln!(logfile, "[{}:{p}]:{t}", s.unwrap_or("<default>"));
-                let _ = logfile.flush();
+                debug!("[{}:{p}]:{t}", s.unwrap_or("<default>"));
             });
         Ok(ret)
     }
@@ -917,7 +921,7 @@ impl InstallationContext {
             .as_map_ref()
             .map_err(|e| anyhow!(e))?
             .get(key)
-            .ok_or(anyhow!("Key not found"))
+            .ok_or(anyhow!("Key '{key}' not found"))
             .cloned()
     }
 
@@ -971,6 +975,7 @@ fn main() -> anyhow::Result<()> {
 
             match res {
                 Err(e) => {
+                    error!("Error[{}]: {e}", line!());
                     let _ = act_error(term, &mut ctx, e);
                     return;
                 }
@@ -980,23 +985,31 @@ fn main() -> anyhow::Result<()> {
                     {
                         Ok(step) => step,
                         Err(e) => {
+                            error!("Error[{}]: {e}", line!());
                             let _ = act_error(term, &mut ctx, e);
                             return;
                         }
                     };
 
+                    info!("Moving forward {next:?}..");
                     history.push(step);
                     step = next;
                 }
                 Ok(StepResult::Quit) => {
+                    info!("Move to quit");
                     history.push(step);
                     step = Step::Quit;
                 }
-                Ok(StepResult::Finish) => return,
+                Ok(StepResult::Finish) => {
+                    info!("Exit..");
+                    return;
+                }
                 Ok(StepResult::Back) => {
                     if let Some(s) = history.pop() {
+                        info!("Moving back {s:?}..");
                         step = s;
                     } else {
+                        error!("Stack is empty");
                         let _ = act_error(term, &mut ctx, Error::msg("The steps stack is empty"));
                         return;
                     }

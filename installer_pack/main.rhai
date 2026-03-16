@@ -2,11 +2,13 @@
 
 fn get_metadata(config) {
 
+
     config += #{
         app_name: "Test",
         path: #"installpath"# ,
         license: "LICENSE",
     };
+    print(config)
 }
 
 
