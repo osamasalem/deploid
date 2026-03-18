@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["deploid", "template"]
+members = ["deploid", "installer"]
 
 [workspace.lints.clippy]
 all = "warn"

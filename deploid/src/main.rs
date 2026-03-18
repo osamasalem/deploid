@@ -5,13 +5,24 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const DEPLOID: &str = r#"
+░███████   ░██████████ ░█████████  ░██           ░██████   ░██████░███████
+░██   ░██  ░██         ░██     ░██ ░██          ░██   ░██    ░██  ░██   ░██
+░██    ░██ ░██         ░██     ░██ ░██         ░██     ░██   ░██  ░██    ░██
+░██    ░██ ░█████████  ░█████████  ░██         ░██     ░██   ░██  ░██    ░██
+░██    ░██ ░██         ░██         ░██         ░██     ░██   ░██  ░██    ░██
+░██   ░██  ░██         ░██         ░██          ░██   ░██    ░██  ░██   ░██
+░███████   ░██████████ ░██         ░██████████   ░██████   ░██████░███████
+"#;
+
 #[cfg(debug_assertions)]
-const TEMPLATE_EXEC: &[u8] = include_bytes!("..\\..\\target\\debug\\template.exe");
+const INSTALLER_EXEC: &[u8] = include_bytes!("..\\..\\target\\debug\\installer.exe");
 
 #[cfg(not(debug_assertions))]
-const TEMPLATE_EXEC: &[u8] = include_bytes!("..\\..\\target\\release\\template.exe");
+const INSTALLER_EXEC: &[u8] = include_bytes!("..\\..\\target\\release\\installer.exe");
 
 use clap::Parser;
+use crossterm::style::Stylize;
 use wincode::{self, SchemaRead, SchemaWrite};
 use zip::write::FileOptions;
 
@@ -49,7 +60,12 @@ fn create_zip_from_folder(
         let mut entrypath = pack.clone();
         entrypath.push(entry.path().strip_prefix(path)?);
         if entry.file_type().is_file() {
-            println!("* Adding file : {}", entrypath.display());
+            println!(
+                "{} {} {}",
+                "*".red(),
+                "Adding file:".grey(),
+                entrypath.display().to_string().green()
+            );
             zip.start_file_from_path(entrypath, FileOptions::DEFAULT)?;
             let file = File::open(entry.path())?;
             let mut file = BufReader::new(file);
@@ -60,7 +76,13 @@ fn create_zip_from_folder(
 
     zip.finish()?;
 
-    println!("- Total {count} file(s) written..");
+    println!(
+        "{} {} {} {}",
+        "-".cyan(),
+        "Total".yellow(),
+        count.to_string().blue(),
+        "file(s) written..".yellow()
+    );
 
     Ok(())
 }
@@ -89,32 +111,49 @@ struct CommandLineArgs {
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = CommandLineArgs::parse();
 
-    println!("- Command line parsed..");
+    println!("{}", DEPLOID.cyan());
 
-    println!("- Starting file :[{}]..", cli.output.display());
+    println!("{} {}", "-".cyan(), "Command line parsed..".yellow());
 
-    let mut file = fs::OpenOptions::new()
+    println!(
+        "{} {}{}",
+        "-".cyan(),
+        "Starting file :".yellow(),
+        cli.output.display().to_string().green()
+    );
+
+    let file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .open(cli.output)?;
     let mut file = BufWriter::new(file);
 
-    println!("- Writing the runner executable..");
-    file.write_all(TEMPLATE_EXEC)?;
+    println!(
+        "{} {}",
+        "-".cyan(),
+        "Writing the runner executable..".yellow()
+    );
 
-    println!("- Start adding and compressing package files..");
-    let start = TEMPLATE_EXEC.len() as u64;
+    file.write_all(INSTALLER_EXEC)?;
+
+    println!(
+        "{} {}",
+        "-".cyan(),
+        "Start adding and compressing package files..".yellow()
+    );
+
+    let start = INSTALLER_EXEC.len() as u64;
 
     create_zip_from_folder(&mut file, &Path::new(&cli.source))?;
     let size = file.stream_position()? - start;
 
-    println!("- Writing footer structure..");
+    println!("{} {}", "-".cyan(), "Writing footer structure..".yellow());
 
     let header = PostExecutableHeader::new(size as usize);
     let header = wincode::serialize(&header)?;
 
     file.write_all(&header)?;
-    println!("- Done..");
+    println!("{} {}", "-".cyan(), "Done..".yellow());
 
     Ok(())
 }

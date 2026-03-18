@@ -1,13 +1,14 @@
 use std::{
     env,
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, Stdout, Write},
+    fs::{self, File},
+    io::{Read, Seek, Stdout},
     path::PathBuf,
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Error, anyhow, bail};
+use clap::Parser;
 use log::{debug, error, info};
 use rand::{
     distr::{Alphanumeric, SampleString},
@@ -26,11 +27,19 @@ use ratatui::{
     },
 };
 use rhai::{AST, Dynamic, Engine, FuncArgs, Map, Scope};
-use simplelog::{Config, WriteLogger};
+use simplelog::Config;
 use smartstring::alias;
 use tui_input::{Input, backend::crossterm::EventHandler};
 
 const MAGIC_NUM: u64 = 0xFEEDCAFEBABEFACE;
+
+const WELCOME_MESSAGE: &str = r#"Welcome to the Setup Wizard
+
+This wizard will guide you through the installation on your computer. The process will only take a few minutes.
+
+Please close any running applications before continuing to ensure the installation completes successfully.
+
+Click "Next" to continue, or "Quit" to exit the setup at any time."#;
 
 #[derive(SchemaWrite, SchemaRead)]
 #[repr(C)]
@@ -127,20 +136,21 @@ impl Step {
         let app_name = ctx.get_app_name().context("Cannot get app name")?;
         loop {
             term.draw(|f| {
-
-                Self::render_header("👋 Welcome",f, &app_name);
-                let message = r#"Welcome to the Setup Wizard
-
-This wizard will guide you through the installation on your computer. The process will only take a few minutes.
-
-Please close any running applications before continuing to ensure the installation completes successfully.
-
-Click "Next" to continue, or "Quit" to exit the setup at any time."#;
+                Self::render_header("👋 Welcome", f, &app_name);
+                let message = WELCOME_MESSAGE;
                 let paragrah = Paragraph::new(message).wrap(Wrap::default());
-                f.render_widget(paragrah, Rect { x: 1, y: 6, width: f.area().width -2 , height: f.area().height - 3 });
+                f.render_widget(
+                    paragrah,
+                    Rect {
+                        x: 1,
+                        y: 6,
+                        width: f.area().width - 2,
+                        height: f.area().height - 3,
+                    },
+                );
                 board.draw(f);
-            }).context("Failed to initiate draw")
-            ?;
+            })
+            .context("Failed to initiate draw")?;
             match board.handle_event(&event::read().context("Failed to read event")?) {
                 Some(0) => return Ok(StepResult::Next),
                 Some(1) => return Ok(StepResult::Quit),
@@ -450,7 +460,9 @@ Are you sure you want to proceed"#;
                 f.render_widget(path, Rect::new(1, 12, f.area().width - 2, 1));
             })
             .context("Failed to initiate draw")?;
-            step.cast::<InstallAction>().act(ctx)?;
+            if !ctx.cli.dry_run {
+                step.cast::<InstallAction>().act(ctx)?;
+            }
         }
 
         Ok(StepResult::Next)
@@ -783,6 +795,15 @@ impl InstallAction {
     }
 }
 
+fn load_text_from_file(file: String) -> RhaiResult {
+    fs::read_to_string(file).map(|x| x.into()).map_err(|e| {
+        Box::new(EvalAltResult::ErrorSystem(
+            "Cannot read text from file".into(),
+            e.into(),
+        ))
+    })
+}
+
 #[export_module]
 #[allow(non_snake_case)]
 #[allow(non_upper_case_globals)]
@@ -865,6 +886,7 @@ struct InstallationContext {
     config: Dynamic,
     script: Option<AST>,
     base_dir: PathBuf,
+    cli: CommandLineArgs,
 }
 
 impl InstallationContext {
@@ -889,7 +911,9 @@ impl InstallationContext {
             config: Dynamic::from(Map::new()).into_shared(),
             script: None,
             base_dir,
+            cli: CommandLineArgs::parse(),
         };
+
         ret.engine
             .register_type_with_name::<Step>("Step")
             .register_static_module("Step", exported_module!(StepModule).into())
@@ -898,12 +922,18 @@ impl InstallationContext {
                 "InstallAction",
                 exported_module!(InstallActionModule).into(),
             )
+            .register_fn("load_text_from_file", load_text_from_file)
             .on_print(|s| {
                 info!("{s}");
             })
             .on_debug(|t, s, p| {
                 debug!("[{}:{p}]:{t}", s.unwrap_or("<default>"));
             });
+
+        ret.insert_key_value_config("os".into(), std::env::consts::OS.into())?;
+        ret.insert_key_value_config("arch".into(), std::env::consts::OS.into())?;
+        ret.insert_key_value_config("dry_run".into(), ret.cli.dry_run.into())?;
+
         Ok(ret)
     }
 
@@ -960,13 +990,21 @@ impl InstallationContext {
     }
 }
 
+#[derive(Parser)]
+
+struct CommandLineArgs {
+    #[arg(
+        short,
+        long,
+        default_value = "false",
+        help = "Source folder where installation files lie."
+    )]
+    dry_run: bool,
+}
+
 fn main() -> anyhow::Result<()> {
     let mut ctx = InstallationContext::new()?;
 
-    ctx.insert_key_value_config("os".into(), std::env::consts::OS.into())?;
-    ctx.insert_key_value_config("arch".into(), std::env::consts::OS.into())?;
-
-    println!("{:?}", ctx.config);
     ratatui::run(|term| {
         let mut step = Step::Init;
         let mut history = vec![];
@@ -991,19 +1029,31 @@ fn main() -> anyhow::Result<()> {
                         }
                     };
 
+                    if history.contains(&next) {
+                        let _ = act_error(
+                            term,
+                            &mut ctx,
+                            anyhow!("Loop detected !! step {next:?} already in the history.."),
+                        );
+                        return;
+                    }
+
                     info!("Moving forward {next:?}..");
                     history.push(step);
                     step = next;
                 }
+
                 Ok(StepResult::Quit) => {
                     info!("Move to quit");
                     history.push(step);
                     step = Step::Quit;
                 }
+
                 Ok(StepResult::Finish) => {
                     info!("Exit..");
                     return;
                 }
+
                 Ok(StepResult::Back) => {
                     if let Some(s) = history.pop() {
                         info!("Moving back {s:?}..");

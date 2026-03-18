@@ -1,17 +1,23 @@
-
-
+/* The metadata bag the contains the configurations
+ * that will be used by the script to be used by the engine
+ * or used by this script to be used in different places
+ * and branching
+ */
 fn get_metadata(config) {
-
-
     config += #{
         app_name: "Test",
-        path: #"installpath"# ,
-        license: "LICENSE",
+        path: "C:\\Program Files\\TestDeploid\\" ,
+        license: load_text_from_file("LICENSE"),
     };
     print(config)
 }
 
 
+/* This function controls the sequence and order of the
+ * wizard steps from start to finish, this is called before
+ * each step to route the wizard to the proper steps based on
+ * configuration
+ */
 fn next_action(config, action) {
 
     switch(action.enum_type) {
@@ -24,7 +30,11 @@ fn next_action(config, action) {
     }
 }
 
-
+/* this is the actual installation script steps
+ * this can be controlled by the config that are filled
+ * throughout the wizard steps, this function is exactly
+ * called in the start of the copy files step
+ */
 fn installation_actions(config) {
     InstallAction::CopyDir("contrib","contrib")
     + InstallAction::CopyDir("runtime","runtime")

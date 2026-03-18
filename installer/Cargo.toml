@@ -1,5 +1,5 @@
 [package]
-name = "template"
+name = "installer"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
@@ -17,6 +17,7 @@ walkdir = "2.5.0"
 rand = "0.10.0"
 log = "0.4.29"
 simplelog = "0.12.2"
+clap = { version = "4.6.0", features = ["derive"] }
 
 [build-dependencies]
 winres = "0.1.12"

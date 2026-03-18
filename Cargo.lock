@@ -497,6 +497,7 @@ name = "deploid"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "crossterm",
  "serde",
  "walkdir",
  "wincode",
@@ -796,6 +797,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "installer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "log",
+ "rand 0.10.0",
+ "ratatui",
+ "rhai",
+ "serde",
+ "simplelog",
+ "smartstring",
+ "tui-input",
+ "walkdir",
+ "wincode",
+ "winres",
+ "zip",
 ]
 
 [[package]]
@@ -1712,25 +1733,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "template"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "log",
- "rand 0.10.0",
- "ratatui",
- "rhai",
- "serde",
- "simplelog",
- "smartstring",
- "tui-input",
- "walkdir",
- "wincode",
- "winres",
- "zip",
 ]
 
 [[package]]
