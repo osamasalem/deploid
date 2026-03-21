@@ -124,6 +124,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let file = fs::OpenOptions::new()
         .write(true)
+        .truncate(true)
         .create(true)
         .open(cli.output)?;
     let mut file = BufWriter::new(file);

@@ -5,3 +5,10 @@ members = ["deploid", "installer"]
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[profile.release]
+panic = "abort"
+lto = "fat"
+strip = true
+opt-level = "z"
+codegen-units = 1

@@ -81,7 +81,7 @@ fn act_error(
 
     loop {
         term.draw(|f| {
-            let title = Paragraph::new("❌ Error")
+            let title = Paragraph::new("❌ Error".rapid_blink().red())
                 .block(Block::new().borders(Borders::BOTTOM).blue())
                 .gray();
             f.render_widget(title, Rect::new(1, 1, f.area().width - 2, 2));
@@ -819,10 +819,13 @@ mod InstallActionModule {
         InstallAction::CopyFile(src.clone(), src)
     }
 
-    pub fn CopyDir(src: String, dst: String) -> Dynamic {
+    #[rhai_fn(return_raw)]
+    pub fn CopyDir(src: String, dst: String) -> RhaiResult {
         let mut res = vec![];
         for entry in WalkDir::new(src.clone()) {
-            let entry = entry.unwrap();
+            let entry = entry.map_err(|e| {
+                EvalAltResult::ErrorSystem("Cannot get the entry from file system".into(), e.into())
+            })?;
             if entry.path().is_file() {
                 let path = PathBuf::from(dst.clone())
                     .join(entry.path().strip_prefix(src.clone()).unwrap());
@@ -832,22 +835,22 @@ mod InstallActionModule {
                 )));
             }
         }
-        Dynamic::from_array(res)
+        Ok(Dynamic::from_array(res))
     }
 
     pub fn CreateDir(name: String) -> InstallAction {
         InstallAction::CreateDir(name)
     }
 
-    pub fn ExecuteCommand(cmd: String, args: Dynamic) -> InstallAction {
-        InstallAction::ExecuteCommand(
+    #[rhai_fn(return_raw)]
+    pub fn ExecuteCommand(cmd: String, args: Dynamic) -> Result<InstallAction, Box<EvalAltResult>> {
+        Ok(InstallAction::ExecuteCommand(
             cmd,
-            args.as_array_ref()
-                .unwrap()
+            args.as_array_ref()?
                 .iter()
-                .map(|x| x.as_immutable_string_ref().unwrap().to_string())
-                .collect(),
-        )
+                .map(|x| x.as_immutable_string_ref().map(|v| v.to_string()))
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
     }
 
     #[rhai_fn(global, get = "enum_type", pure)]
@@ -994,12 +997,18 @@ impl InstallationContext {
 
 struct CommandLineArgs {
     #[arg(
-        short,
         long,
         default_value = "false",
-        help = "Source folder where installation files lie."
+        help = "Dry-run: Does not perform any installation steps(for testing only)"
     )]
     dry_run: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "do not clean up after installation"
+    )]
+    no_cleanup: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -1067,5 +1076,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    let _ = fs::remove_dir_all(ctx.base_dir);
     Ok(())
 }
