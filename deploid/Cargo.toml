@@ -1,8 +1,13 @@
 [package]
 name = "deploid"
 description = "Cross-platform and scripted TUI install wizard builder"
+license-file = "../LICENSE"
+homepage = "https://github.com/osamasalem/deploid"
+repository = "https://github.com/osamasalem/deploid"
+readme = "../README.md"
 version = "0.1.0"
 edition = "2024"
+keywords = ["installer", "tool"]
 build = "build.rs"
 
 
